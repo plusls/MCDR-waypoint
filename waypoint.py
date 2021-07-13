@@ -4,6 +4,7 @@ from mcdreforged.api.command import *
 import re
 import os
 from typing import Any, List, Dict, Tuple
+from mcdreforged.minecraft.rtext import RTextList, RColor, RAction, RText
 from ruamel import yaml
 from enum import Enum
 
@@ -21,7 +22,8 @@ help_msg = '''
 dim 可使用 1, 0, -1 代表末地，主世界，下界，或者直接使用 minecraft:the_end, minecraft:overworld, minecraft:the_nether
 §b!!wp search <content>§r 搜索含有指定内容名字的路径点
 §b!!wp add [name:name, x:1, y:2, z:3, dim:minecraft:overworld] §r 添加路径点（需要权限）
-§b!!wp add§r 随后直接使用 voxel 分享一系列的路径点来添加路径点（需要权限）
+§b!!wp addvoxel§r 随后直接使用 voxel 分享一系列的路径点来添加路径点（需要权限）
+§b!!wp addxaero§r 随后直接使用 voxel 分享一系列的路径点来添加路径点（需要权限）
 §b!!wp del <content>§r 删除名字包含 <content> 的路径点，会有确认信息（需要权限）
 §b!!wp set_world <world_name>§r 设置当前世界（为了适配 voxel 的多世界, 默认值为 '', 需要权限）
 §b!!wp set_permission_level <permission_level>§r 设置权限（需要权限）
@@ -30,7 +32,7 @@ dim 可使用 1, 0, -1 代表末地，主世界，下界，或者直接使用 mi
 
 PLUGIN_METADATA = {
     'id': 'waypoint',
-    'version': '1.0.1',
+    'version': '1.1.0',
     'name': 'waypoint',
     'description': 'waypoint',  # RText component is allowed
     'author': 'plusls',
@@ -56,6 +58,12 @@ class Waypoint:
         1: "minecraft:the_end"
     }
 
+    dim_id_rtext_map = {
+        0: RText('主世界', color=RColor.green).h('minecraft:overworld'),
+        -1: RText('下界', color=RColor.red).h('minecraft:the_nether'),
+        1: RText('末地', color=RColor.dark_purple).h('minecraft:the_end'),
+    }
+
     def __init__(self, name: str, x: str, y: str, z: str, dim: str):
         self.name = name
         self.x = int(x)
@@ -74,6 +82,10 @@ class Waypoint:
     @classmethod
     def get_dim_str(cls, dim_id: int) -> str:
         return cls.dim_id_str_map[dim_id]
+
+    @classmethod
+    def get_dim_rtext(cls, dim_id: int) -> RText:
+        return cls.dim_id_rtext_map[dim_id]
 
     @staticmethod
     def check_result(result: dict) -> Dict[str, str]:
@@ -108,9 +120,48 @@ class Waypoint:
             return ParseResult(None, total_read), '路径点坐标格式应为整数'
         return ParseResult(waypoint, total_read), ''
 
+    XAERO_SHARE_STR = 'xaero-waypoint:'
+
+    @classmethod
+    def parse_xaero(cls, text: str) -> Tuple[ParseResult, str]:
+        total_read = 0
+        # xaero-waypoint:粘土山空置域:粘:-421:121:-5506:11:false:0:Internal-overworld-waypoints
+        if not text.startswith(cls.XAERO_SHARE_STR):
+            return ParseResult(None, total_read), 'xaero 分享格式不正确'
+
+        total_read += len(cls.XAERO_SHARE_STR)
+        text = text[len(cls.XAERO_SHARE_STR):]
+        text_list = text.split(':')
+        if len(text_list) != 9:
+            return ParseResult(None, total_read), 'xaero 分享格式不正确'
+
+        if not text_list[8].startswith('Internal-') or not text_list[8].endswith('-waypoints'):
+            return ParseResult(None, total_read), 'xaero 维度格式不正确，应以 "Internal-" 开头 "-waypoints" 结束'
+        text_list[8] = 'minecraft:' + text_list[8][len('Internal-'):-len('-waypoints')].replace('-', '_')
+        try:
+            waypoint = cls(text_list[0].replace('^col^', ':'), text_list[2], text_list[3], text_list[4], text_list[8])
+            total_read += len(text)
+        except ValueError:
+            return ParseResult(None, total_read), '路径点坐标格式应为整数'
+        except KeyError:
+            return ParseResult(None, total_read), '维度格式不正确'
+        return ParseResult(waypoint, total_read), ''
+
+
     def __str__(self):
         return '[name:{}, x:{}, y:{}, z:{}, dim:{}, world:{}]'.format(self.name, self.x, self.y, self.z, self.get_dim_str(self.dim_id), waypoint_config['world'])
 
+    def get_rtext_list(self):
+        voxel_command = '/newWaypoint [name:{}, x:{}, y:{}, z:{}, dim:{}, world:{}]'.format(self.name, self.x, self.y, self.z, self.get_dim_str(self.dim_id), waypoint_config['world'])
+        xaero_command = 'xaero_waypoint_add:{}:{}:{}:{}:{}:6:false:0:Internal_{}_waypoints'.format(self.name.replace(':', '^col^'), self.name[0], self.x, self.y, self.z, self.get_dim_str(self.dim_id).replace('minecraft:', ''))
+
+        waypoint_str = '{} §a({}, {}, {})§r §7@§r '.format(self.name, self.x, self.y, self.z)
+        return RTextList(
+				RText('[+V]', color=RColor.gold).h('§6Voxemapl§r: 左键高亮路径点, ctrl + 左键点击添加路径点').c(RAction.run_command, voxel_command),
+				RText('[+X] ', color=RColor.gold).h('§6Xaeros Minimap§r: 点击添加路径点').c(RAction.run_command, xaero_command),
+                waypoint_str,
+                self.get_dim_rtext(self.dim_id)
+		    )
 
 # 配置
 waypoint_config = {}
@@ -120,10 +171,12 @@ wait_voxel_waypoint = {}
 
 class WaitStatus(Enum):
     NONE = 0
-    WAIT_WAYPOINTS = 1
-    SKIP_TO_WAIT_WAYPOINTS = 2
-    WAIT_DELETE_CONFIRM = 3
-    SKIP_TO_WAIT_DELETE_CONFIRM = 4
+    WAIT_VOXEL_WAYPOINTS = 1
+    WAIT_XAERO_WAYPOINTS = 2
+    SKIP_TO_WAIT_VOXEL_WAYPOINTS = 3
+    SKIP_TO_WAIT_XAERO_WAYPOINTS = 4
+    WAIT_DELETE_CONFIRM = 5
+    SKIP_TO_WAIT_DELETE_CONFIRM = 6
 
 # 将要删除的 content
 waypoint_delete_content = {}
@@ -179,17 +232,18 @@ def list_points(src: CommandSource, dim: Any):
     else:
         dim_id_list = [dim_id]
 
-    reply_text = ''
+    reply_text_list = RTextList()
     for i in dim_id_list:
         count = 0
-        reply_text += '维度 §2{}§r 共有 §4{}§r 个路径点:\n'
+        dim_text_list = RTextList()
         for _, point in waypoint_config['waypoints'].items():
             if point.dim_id != i:
                 continue
-            reply_text += str(point) + '\n'
+            dim_text_list.append(point.get_rtext_list(), '\n')
             count += 1
-        reply_text = reply_text.format(Waypoint.get_dim_str(i), count)
-    src.reply('§b[Waypoints]§r wp list {} 结果如下:\n{}'.format(dim, reply_text))
+        reply_text_list.append('维度 §2{}§r 共有 §4{}§r 个路径点:\n'.format(Waypoint.get_dim_str(i), count), dim_text_list)
+    reply_text_list = RTextList('§b[Waypoints]§r wp list {} 结果如下:\n'.format(dim), reply_text_list)
+    src.reply(reply_text_list)
 
 
 def add_voxel(src: CommandSource):
@@ -198,7 +252,17 @@ def add_voxel(src: CommandSource):
         return
     if src.is_player:
         src.reply('§b[Waypoints]§r 接下来请使用 voxel 将 waypoint 分享给所有人')
-        wait_voxel_waypoint[src.get_info().player] = WaitStatus.SKIP_TO_WAIT_WAYPOINTS
+        wait_voxel_waypoint[src.get_info().player] = WaitStatus.SKIP_TO_WAIT_VOXEL_WAYPOINTS
+    else:
+        src.reply('§b[Waypoints]§r 控制台无法使用此操作')
+
+def add_xaero(src: CommandSource):
+    if not check_permission(src.get_server(), src.get_info()):
+        src.reply('§b[Waypoints]§r 你没有权限添加路径点！')
+        return
+    if src.is_player:
+        src.reply('§b[Waypoints]§r 接下来请使用 xaero 将 waypoint 分享给所有人')
+        wait_voxel_waypoint[src.get_info().player] = WaitStatus.SKIP_TO_WAIT_XAERO_WAYPOINTS
     else:
         src.reply('§b[Waypoints]§r 控制台无法使用此操作')
 
@@ -229,14 +293,15 @@ def delete_point(src: CommandSource, content: str):
     waypoint_delete_content[src.get_info().player] = content
 
 def search_point(src: CommandSource, content: str):
-    reply_text = '§b[Waypoints]§r 共有 §b{}§r 个名字包含 §b{}§r 的路径点:\n'
+    reply_rtext_list = RTextList()
     count = 0
     for _, point in waypoint_config['waypoints'].items():
         if content not in point.name:
             continue
-        reply_text += str(point) + '\n'
+        reply_rtext_list.append(point.get_rtext_list(), '\n')
         count += 1
-    src.reply(reply_text.format(count, content))
+    reply_rtext_list = RTextList('§b[Waypoints]§r 共有 §b{}§r 个名字包含 §b{}§r 的路径点:\n'.format(count, content), reply_rtext_list)
+    src.reply(reply_rtext_list)
 
 def add_point_to_db(server: ServerInterface, point: Waypoint):
     waypoint_config['waypoints'][point.name] = point
@@ -287,7 +352,11 @@ def on_load(server: ServerInterface, prev_module):
             Literal('add').then(
                 PointArgument('waypoint').runs(
                     lambda src, ctx: add_point(src, ctx['waypoint']))
-            ).runs(lambda src, ctx: add_voxel(src))
+            )
+        ).then(
+            Literal('addvoxel').runs(lambda src, ctx: add_voxel(src))
+        ).then(
+            Literal('addxaero').runs(lambda src, ctx: add_xaero(src))
         ).then(
             Literal('list').then(
                 Text('dim').runs(
@@ -319,7 +388,7 @@ def on_player_left(server: ServerInterface, player: str):
 
 def on_info(server: ServerInterface, info: Info):
     wait_value = wait_voxel_waypoint.get(info.player, WaitStatus.NONE)
-    if wait_value == WaitStatus.WAIT_WAYPOINTS:
+    if wait_value == WaitStatus.WAIT_VOXEL_WAYPOINTS:
         result, msg = Waypoint.parse(info.content)
         if result.value == None:
             server.reply(info, '§b[Waypoints]§r 路径点格式不正确，已结束添加路径点\n msg: {}'.format(msg))
@@ -327,8 +396,18 @@ def on_info(server: ServerInterface, info: Info):
         else:
             add_point_to_db(server, result.value)
             server.reply(info, '§b[Waypoints]§r 请输入任意字符结束添加或者继续分享要添加的路径点')
-    elif wait_value == WaitStatus.SKIP_TO_WAIT_WAYPOINTS:
-        wait_voxel_waypoint[info.player] = WaitStatus.WAIT_WAYPOINTS
+    elif wait_value == WaitStatus.WAIT_XAERO_WAYPOINTS:
+        result, msg = Waypoint.parse_xaero(info.content)
+        if result.value == None:
+            server.reply(info, '§b[Waypoints]§r 路径点格式不正确，已结束添加路径点\n msg: {}'.format(msg))
+            del wait_voxel_waypoint[info.player]
+        else:
+            add_point_to_db(server, result.value)
+            server.reply(info, '§b[Waypoints]§r 请输入任意字符结束添加或者继续分享要添加的路径点')
+    elif wait_value == WaitStatus.SKIP_TO_WAIT_VOXEL_WAYPOINTS:
+        wait_voxel_waypoint[info.player] = WaitStatus.WAIT_VOXEL_WAYPOINTS
+    elif wait_value == WaitStatus.SKIP_TO_WAIT_XAERO_WAYPOINTS:
+        wait_voxel_waypoint[info.player] = WaitStatus.WAIT_XAERO_WAYPOINTS
     elif wait_value == WaitStatus.WAIT_DELETE_CONFIRM:
         if info.content == 'YES':
             delete_db_point(server, info)
