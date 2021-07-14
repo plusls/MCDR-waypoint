@@ -57,9 +57,11 @@ class Waypoint:
         -1: "minecraft:the_nether",
         1: "minecraft:the_end"
     }
+    color_map = {0: RColor.green, -1: RColor.dark_red, 1: RColor.light_purple}
+
 
     dim_id_rtext_map = {
-        0: RText('主世界', color=RColor.green).h('minecraft:overworld'),
+        0: RText('主世界', color=RColor.dark_aqua).h('minecraft:overworld'),
         -1: RText('下界', color=RColor.red).h('minecraft:the_nether'),
         1: RText('末地', color=RColor.dark_purple).h('minecraft:the_end'),
     }
@@ -154,14 +156,27 @@ class Waypoint:
     def get_rtext_list(self):
         voxel_command = '/newWaypoint [name:{}, x:{}, y:{}, z:{}, dim:{}, world:{}]'.format(self.name, self.x, self.y, self.z, self.get_dim_str(self.dim_id), waypoint_config['world'])
         xaero_command = 'xaero_waypoint_add:{}:{}:{}:{}:{}:6:false:0:Internal_{}_waypoints'.format(self.name.replace(':', '^col^'), self.name[0], self.x, self.y, self.z, self.get_dim_str(self.dim_id).replace('minecraft:', ''))
-
-        waypoint_str = '{} §a({}, {}, {})§r §7@§r '.format(self.name, self.x, self.y, self.z)
-        return RTextList(
+        ret = RTextList(
 				RText('[+V]', color=RColor.gold).h('§6Voxemapl§r: 左键高亮路径点, ctrl + 左键点击添加路径点').c(RAction.run_command, voxel_command),
-				RText('[+X] ', color=RColor.gold).h('§6Xaeros Minimap§r: 点击添加路径点').c(RAction.run_command, xaero_command),
-                waypoint_str,
-                self.get_dim_rtext(self.dim_id)
-		    )
+				RText('[+X] ', color=RColor.gold).h('§6Xaeros Minimap§r: 点击添加路径点').c(RAction.run_command, xaero_command))
+        ret.append(self.name + ' ')
+        ret.append(RText('({}, {}, {})'.format(self.x, self.y, self.z), color=self.color_map[self.dim_id]))
+        ret.append(' ')
+        ret.append(self.get_dim_rtext(self.dim_id))
+
+        if self.dim_id == 0:
+            ret.append(' -> ')
+            ret.append(RText('({}, {}, {})'.format(self.x//8, self.y//8, self.z//8), color=self.color_map[-1]))
+            ret.append(' ')
+            ret.append(self.get_dim_rtext(-1))
+        elif self.dim_id == -1:
+            ret.append(' -> ')
+            ret.append(RText('({}, {}, {})'.format(self.x*8, self.y*8, self.z*8), color=self.color_map[0]))
+            ret.append(' ')
+            ret.append(self.get_dim_rtext(0))
+        
+        return ret
+
 
 # 配置
 waypoint_config = {}
